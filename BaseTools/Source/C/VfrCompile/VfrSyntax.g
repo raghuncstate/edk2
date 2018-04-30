@@ -42,7 +42,7 @@ class CVfrDLGLexer : public VfrLexer
 {
 public:
   CVfrDLGLexer (DLGFileInput *F) : VfrLexer (F) {};
-  INT32 errstd (char *Text)
+  void errstd (const char *Text)
   {
     printf ("unrecognized input '%s'\n", Text);
   }
@@ -969,7 +969,7 @@ vfrExtensionData[UINT8 *DataBuff, UINT32 Size, CHAR8 *TypeName, UINT32 TypeSize,
                  break;
               }
             }
-            if (TFName != NULL) { delete TFName; TFName = NULL; }
+            if (TFName != NULL) { delete[] TFName; TFName = NULL; }
           >>
   )*
 )
@@ -986,7 +986,7 @@ vfrStatementDefaultStore :
                                                     <<
                                                        if (gCVfrDefaultStore.DefaultIdRegistered (DefaultId) == FALSE) {
                                                          CIfrDefaultStore DSObj;
-                                                         _PCATCH(gCVfrDefaultStore.RegisterDefaultStore (DSObj.GetObjBinAddr(), N->getText(), _STOSID(S->getText(), S->getLine()), DefaultId)), D->getLine();
+                                                         _PCATCH(gCVfrDefaultStore.RegisterDefaultStore (DSObj.GetObjBinAddr<CHAR8>(), N->getText(), _STOSID(S->getText(), S->getLine()), DefaultId)), D->getLine();
                                                          DSObj.SetLineNo(D->getLine());
                                                          DSObj.SetDefaultName (_STOSID(S->getText(), S->getLine()));
                                                          DSObj.SetDefaultId (DefaultId);
@@ -1166,7 +1166,7 @@ vfrStatementVarStoreEfi :
                                                        VSEObj.SetSize ((UINT16) Size);
                                                        VSEObj.SetName (StoreName);
                                                        if (IsUEFI23EfiVarstore == FALSE && StoreName != NULL) {
-                                                         delete StoreName; 
+                                                         delete[] StoreName;
                                                        }
                                                     >>
   ";"
@@ -1324,7 +1324,7 @@ vfrQuestionBaseInfo[EFI_VARSTORE_INFO & Info, EFI_QUESTION_ID & QId, EFI_QUESION
                                                    >>
                                                    <<
                                                       if (VarIdStr != NULL) {
-                                                        delete VarIdStr;
+                                                        delete[] VarIdStr;
                                                       }
                                                       _SAVE_CURRQEST_VARINFO (Info);
                                                    >>
@@ -1511,7 +1511,7 @@ vfrStorageVarId[EFI_VARSTORE_INFO & Info, CHAR8 *&QuestVarIdStr, BOOLEAN CheckFl
                                                        }
 
                                                        QuestVarIdStr = VarIdStr;
-                                                       if (VarStr != NULL) {delete VarStr;}
+                                                       if (VarStr != NULL) {delete[] VarStr;}
                                                     >>
   )
   ;
@@ -1770,7 +1770,7 @@ vfrFormDefinition :
                                                         LObj3.SetNumber (0xffff);  //add end label for UEFI, label number hardcode 0xffff
                                                       }
 
-                                                      {CIfrEnd EObj; EObj.SetLineNo (E->getLine()); mLastFormEndAddr = EObj.GetObjBinAddr (); gAdjustOpcodeOffset = EObj.GetObjBinOffset ();}
+                                                      {CIfrEnd EObj; EObj.SetLineNo (E->getLine()); mLastFormEndAddr = EObj.GetObjBinAddr<CHAR8>(); gAdjustOpcodeOffset = EObj.GetObjBinOffset ();}
                                                     >>
   ";"
   ;
@@ -4105,6 +4105,7 @@ vfrStatementExpression [UINT32 RootLevel, UINT32 ExpOpCount = 0] :
                                                           }
                                                           
                                                           if ($RootLevel == 0) {
+                                                            _CLEAR_SAVED_OPHDR ();
                                                             mCIfrOpHdrIndex --;
                                                           }
                                                        >>
@@ -4389,6 +4390,12 @@ vareqvalExp [UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                        << IdEqValDoSpecial ($ExpOpCount, L->getLine(), QId, VarIdStr, Mask, ConstVal, GREATER_THAN); >>
     )
   )
+  <<
+     if (VarIdStr != NULL) {
+       delete[] VarIdStr;
+       VarIdStr = NULL;
+     }
+  >>
   ;
 
 ideqvalExp [UINT32 & RootLevel, UINT32 & ExpOpCount] :
@@ -4442,6 +4449,12 @@ ideqvalExp [UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                        << IdEqValDoSpecial ($ExpOpCount, L->getLine(), QId, VarIdStr, Mask, ConstVal, GREATER_THAN); >>
     )
   )
+  <<
+     if (VarIdStr != NULL) {
+       delete[] VarIdStr;
+       VarIdStr = NULL;
+     }
+  >>
   ;
 
 ideqidExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
@@ -4494,6 +4507,16 @@ ideqidExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                        << IdEqIdDoSpecial ($ExpOpCount, L->getLine(), QId[0], VarIdStr[0], Mask[0], QId[1], VarIdStr[1], Mask[1], GREATER_THAN); >>
     )
   )
+  <<
+     if (VarIdStr[0] != NULL) {
+       delete[] VarIdStr[0];
+       VarIdStr[0] = NULL;
+     }
+     if (VarIdStr[1] != NULL) {
+       delete[] VarIdStr[1];
+       VarIdStr[1] = NULL;
+     }
+  >>
   ;
 
 ideqvallistExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
@@ -4532,6 +4555,10 @@ ideqvallistExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                               EILObj.SetQuestionId (QId, VarIdStr, LineNo);
                                                             }
                                                             $ExpOpCount++;
+                                                          }
+                                                          if (VarIdStr != NULL) {
+                                                            delete[] VarIdStr;
+                                                            VarIdStr = NULL;
                                                           }
                                                         >>
   ;
@@ -4667,7 +4694,7 @@ getExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                             CIfrGet GObj(L->getLine()); 
                                                             _SAVE_OPHDR_COND (GObj, ($ExpOpCount == 0), L->getLine()); 
                                                             GObj.SetVarInfo (&Info); 
-                                                            delete VarIdStr; 
+                                                            delete[] VarIdStr;
                                                             $ExpOpCount++;
                                                           }
                                                        >>
@@ -4841,7 +4868,7 @@ setExp[UINT32 & RootLevel, UINT32 & ExpOpCount] :
                                                             }
                                                             CIfrSet TSObj(L->getLine()); 
                                                             TSObj.SetVarInfo (&Info); 
-                                                            delete VarIdStr; 
+                                                            delete[] VarIdStr;
                                                             $ExpOpCount++;
                                                           }
                                                        >>
@@ -5057,7 +5084,10 @@ EfiVfrParser::_CLEAR_SAVED_OPHDR (
   VOID
   )
 {
-  mCIfrOpHdr[mCIfrOpHdrIndex]       = NULL;
+  if (mCIfrOpHdr[mCIfrOpHdrIndex] != NULL) {
+    delete mCIfrOpHdr[mCIfrOpHdrIndex];
+    mCIfrOpHdr[mCIfrOpHdrIndex]     = NULL;
+  }
   mCIfrOpHdrLineNo[mCIfrOpHdrIndex] = 0;
 }
 
@@ -5474,7 +5504,7 @@ EfiVfrParser::_STRCAT (
   NewStr[0] = '\0';
   if (*Dest != NULL) {
     strcpy (NewStr, *Dest);
-    delete *Dest;
+    delete[] *Dest;
   }
   strcat (NewStr, Src);
 
@@ -5675,7 +5705,7 @@ EfiVfrParser::_DeclareStandardDefaultStorage (
   //
   CIfrDefaultStore DSObj;
 
-  gCVfrDefaultStore.RegisterDefaultStore (DSObj.GetObjBinAddr(), (CHAR8 *) "Standard Defaults", EFI_STRING_ID_INVALID, EFI_HII_DEFAULT_CLASS_STANDARD);
+  gCVfrDefaultStore.RegisterDefaultStore (DSObj.GetObjBinAddr<CHAR8>(), (CHAR8 *) "Standard Defaults", EFI_STRING_ID_INVALID, EFI_HII_DEFAULT_CLASS_STANDARD);
   DSObj.SetLineNo (LineNo);
   DSObj.SetDefaultName (EFI_STRING_ID_INVALID);
   DSObj.SetDefaultId (EFI_HII_DEFAULT_CLASS_STANDARD);
@@ -5685,7 +5715,7 @@ EfiVfrParser::_DeclareStandardDefaultStorage (
   //
   CIfrDefaultStore DSObjMF;
 
-  gCVfrDefaultStore.RegisterDefaultStore (DSObjMF.GetObjBinAddr(), (CHAR8 *) "Standard ManuFacturing", EFI_STRING_ID_INVALID, EFI_HII_DEFAULT_CLASS_MANUFACTURING);
+  gCVfrDefaultStore.RegisterDefaultStore (DSObjMF.GetObjBinAddr<CHAR8>(), (CHAR8 *) "Standard ManuFacturing", EFI_STRING_ID_INVALID, EFI_HII_DEFAULT_CLASS_MANUFACTURING);
   DSObjMF.SetLineNo (LineNo);
   DSObjMF.SetDefaultName (EFI_STRING_ID_INVALID);
   DSObjMF.SetDefaultId (EFI_HII_DEFAULT_CLASS_MANUFACTURING);

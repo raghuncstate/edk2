@@ -1,7 +1,7 @@
 ## @file
 # Create makefile for MS nmake and GNU make
 #
-# Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2007 - 2018, Intel Corporation. All rights reserved.<BR>
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
 # which accompanies this distribution.  The full text of the license may be found at
@@ -25,6 +25,7 @@ from Common.Misc import *
 from Common.String import *
 from BuildEngine import *
 import Common.GlobalData as GlobalData
+from collections import OrderedDict
 
 ## Regular expression for finding header file inclusions
 gIncludePattern = re.compile(r"^[ \t]*#?[ \t]*include(?:[ \t]*(?:\\(?:\r\n|\r|\n))*[ \t]*)*(?:\(?[\"<]?[ \t]*)([-\w.\\/() \t]+)(?:[ \t]*[\">]?\)?)", re.MULTILINE | re.UNICODE | re.IGNORECASE)
@@ -143,6 +144,11 @@ class BuildFile(object):
         "nmake" :   'if exist %(dir)s $(RD) %(dir)s',
         "gmake" :   "$(RD) %(dir)s"
     }
+    ## cp if exist
+    _CP_TEMPLATE_ = {
+        "nmake" :   'if exist %(Src)s $(CP) %(Src)s %(Dst)s',
+        "gmake" :   "test -f %(Src)s && $(CP) %(Src)s %(Dst)s"
+    }
 
     _CD_TEMPLATE_ = {
         "nmake" :   'if exist %(dir)s cd %(dir)s',
@@ -211,6 +217,8 @@ class BuildFile(object):
             for MacroName in MacroDefinitions:
                 MacroValue = MacroDefinitions[MacroName]
                 MacroValueLength = len(MacroValue)
+                if MacroValueLength == 0:
+                    continue
                 if MacroValueLength <= PathLength and Path.startswith(MacroValue):
                     Path = "$(%s)%s" % (MacroName, Path[MacroValueLength:])
                     break
@@ -250,6 +258,7 @@ BASE_NAME = $(MODULE_NAME)
 MODULE_RELATIVE_DIR = ${module_relative_directory}
 PACKAGE_RELATIVE_DIR = ${package_relative_directory}
 MODULE_DIR = ${module_dir}
+FFS_OUTPUT_DIR = ${ffs_output_directory}
 
 MODULE_ENTRY_POINT = ${module_entry_point}
 ARCH_ENTRY_POINT = ${arch_entry_point}
@@ -418,8 +427,6 @@ cleanlib:
         self.ResultFileList = []
         self.IntermediateDirectoryList = ["$(DEBUG_DIR)", "$(OUTPUT_DIR)"]
 
-        self.SourceFileDatabase = {}        # {file type : file path}
-        self.DestFileDatabase = {}          # {file type : file path}
         self.FileBuildTargetList = []       # [(src, target string)]
         self.BuildTargetList = []           # [target string]
         self.PendingBuildTargetList = []    # [FileBuildRule objects]
@@ -434,13 +441,17 @@ cleanlib:
         self.LibraryMakefileList = []
         self.LibraryBuildDirectoryList = []
         self.SystemLibraryList = []
-        self.Macros = sdict()
+        self.Macros = OrderedDict()
         self.Macros["OUTPUT_DIR"      ] = self._AutoGenObject.Macros["OUTPUT_DIR"]
         self.Macros["DEBUG_DIR"       ] = self._AutoGenObject.Macros["DEBUG_DIR"]
         self.Macros["MODULE_BUILD_DIR"] = self._AutoGenObject.Macros["MODULE_BUILD_DIR"]
         self.Macros["BIN_DIR"         ] = self._AutoGenObject.Macros["BIN_DIR"]
         self.Macros["BUILD_DIR"       ] = self._AutoGenObject.Macros["BUILD_DIR"]
         self.Macros["WORKSPACE"       ] = self._AutoGenObject.Macros["WORKSPACE"]
+        self.Macros["FFS_OUTPUT_DIR"  ] = self._AutoGenObject.Macros["FFS_OUTPUT_DIR"]
+        self.GenFfsList                 = ModuleAutoGen.GenFfsList
+        self.MacroList = ['FFS_OUTPUT_DIR', 'MODULE_GUID', 'OUTPUT_DIR']
+        self.FfsOutputFileList = []
 
     # Compose a dict object containing information used to do replacement in template
     def _CreateTemplateDict(self):
@@ -479,14 +490,14 @@ cleanlib:
             ImageEntryPoint = "_ModuleEntryPoint"
 
         for k, v in self._AutoGenObject.Module.Defines.iteritems():
-            if k not in self._AutoGenObject.Macros.keys():
+            if k not in self._AutoGenObject.Macros:
                 self._AutoGenObject.Macros[k] = v
 
-        if 'MODULE_ENTRY_POINT' not in self._AutoGenObject.Macros.keys():
+        if 'MODULE_ENTRY_POINT' not in self._AutoGenObject.Macros:
             self._AutoGenObject.Macros['MODULE_ENTRY_POINT'] = ModuleEntryPoint
-        if 'ARCH_ENTRY_POINT' not in self._AutoGenObject.Macros.keys():
+        if 'ARCH_ENTRY_POINT' not in self._AutoGenObject.Macros:
             self._AutoGenObject.Macros['ARCH_ENTRY_POINT'] = ArchEntryPoint
-        if 'IMAGE_ENTRY_POINT' not in self._AutoGenObject.Macros.keys():
+        if 'IMAGE_ENTRY_POINT' not in self._AutoGenObject.Macros:
             self._AutoGenObject.Macros['IMAGE_ENTRY_POINT'] = ImageEntryPoint
 
         PCI_COMPRESS_Flag = False
@@ -527,7 +538,7 @@ cleanlib:
         RespFileList = os.path.join(self._AutoGenObject.OutputDir, 'respfilelist.txt')
         if RespDict:
             RespFileListContent = ''
-            for Resp in RespDict.keys():
+            for Resp in RespDict:
                 RespFile = os.path.join(self._AutoGenObject.OutputDir, str(Resp).lower() + '.txt')
                 StrList = RespDict[Resp].split(' ')
                 UnexpandMacro = []
@@ -555,6 +566,7 @@ cleanlib:
                             ExtraData="[%s]" % str(self._AutoGenObject))
 
         self.ProcessBuildTargetList()
+        self.ParserGenerateFfsCmd()
 
         # Generate macros used to represent input files
         FileMacroList = [] # macro name = file list
@@ -627,6 +639,7 @@ cleanlib:
             "platform_version"          : self.PlatformInfo.Version,
             "platform_relative_directory": self.PlatformInfo.SourceDir,
             "platform_output_directory" : self.PlatformInfo.OutputDir,
+            "ffs_output_directory"      : self._AutoGenObject.Macros["FFS_OUTPUT_DIR"],
             "platform_dir"              : self._AutoGenObject.Macros["PLATFORM_DIR"],
 
             "module_name"               : self._AutoGenObject.Name,
@@ -673,6 +686,79 @@ cleanlib:
 
         return MakefileTemplateDict
 
+    def ParserGenerateFfsCmd(self):
+        #Add Ffs cmd to self.BuildTargetList
+        OutputFile = ''
+        DepsFileList = []
+
+        for Cmd in self.GenFfsList:
+            if Cmd[2]:
+                for CopyCmd in Cmd[2]:
+                    Src, Dst = CopyCmd
+                    Src = self.ReplaceMacro(Src)
+                    Dst = self.ReplaceMacro(Dst)
+                    if Dst not in self.ResultFileList:
+                        self.ResultFileList.append('%s' % Dst)
+                    if '%s :' %(Dst) not in self.BuildTargetList:
+                        self.BuildTargetList.append("%s :" %(Dst))
+                        self.BuildTargetList.append('\t' + self._CP_TEMPLATE_[self._FileType] %{'Src': Src, 'Dst': Dst})
+
+            FfsCmdList = Cmd[0]
+            for index, Str in enumerate(FfsCmdList):
+                if '-o' == Str:
+                    OutputFile = FfsCmdList[index + 1]
+                if '-i' == Str:
+                    if DepsFileList == []:
+                        DepsFileList = [FfsCmdList[index + 1]]
+                    else:
+                        DepsFileList.append(FfsCmdList[index + 1])
+            DepsFileString = ' '.join(DepsFileList).strip()
+            if DepsFileString == '':
+                continue
+            OutputFile = self.ReplaceMacro(OutputFile)
+            self.ResultFileList.append('%s' % OutputFile)
+            DepsFileString = self.ReplaceMacro(DepsFileString)
+            self.BuildTargetList.append('%s : %s' % (OutputFile, DepsFileString))
+            CmdString = ' '.join(FfsCmdList).strip()
+            CmdString = self.ReplaceMacro(CmdString)
+            self.BuildTargetList.append('\t%s' % CmdString)
+
+            self.ParseSecCmd(DepsFileList, Cmd[1])
+            for SecOutputFile, SecDepsFile, SecCmd in self.FfsOutputFileList :
+                self.BuildTargetList.append('%s : %s' % (self.ReplaceMacro(SecOutputFile), self.ReplaceMacro(SecDepsFile)))
+                self.BuildTargetList.append('\t%s' % self.ReplaceMacro(SecCmd))
+            self.FfsOutputFileList = []
+
+    def ParseSecCmd(self, OutputFileList, CmdTuple):
+        for OutputFile in OutputFileList:
+            for SecCmdStr in CmdTuple:
+                SecDepsFileList = []
+                SecCmdList = SecCmdStr.split()
+                CmdName = SecCmdList[0]
+                for index, CmdItem in enumerate(SecCmdList):
+                    if '-o' == CmdItem and OutputFile == SecCmdList[index + 1]:
+                        index = index + 1
+                        while index + 1 < len(SecCmdList):
+                            if not SecCmdList[index+1].startswith('-'):
+                                SecDepsFileList.append(SecCmdList[index + 1])
+                            index = index + 1
+                        if CmdName == 'Trim':
+                            SecDepsFileList.append(os.path.join('$(DEBUG_DIR)', os.path.basename(OutputFile).replace('offset', 'efi')))
+                        if OutputFile.endswith('.ui') or OutputFile.endswith('.ver'):
+                            SecDepsFileList.append(os.path.join('$(MODULE_DIR)','$(MODULE_FILE)'))
+                        self.FfsOutputFileList.append((OutputFile, ' '.join(SecDepsFileList), SecCmdStr))
+                        if len(SecDepsFileList) > 0:
+                            self.ParseSecCmd(SecDepsFileList, CmdTuple)
+                        break
+                    else:
+                        continue
+
+    def ReplaceMacro(self, str):
+        for Macro in self.MacroList:
+            if self._AutoGenObject.Macros[Macro] and self._AutoGenObject.Macros[Macro] in str:
+                str = str.replace(self._AutoGenObject.Macros[Macro], '$(' + Macro + ')')
+        return str
+
     def CommandExceedLimit(self):
         FlagDict = {
                     'CC'    :  { 'Macro' : '$(CC_FLAGS)',    'Value' : False},
@@ -706,21 +792,25 @@ cleanlib:
                         SingleCommandLength = len(SingleCommand)
                         SingleCommandList = SingleCommand.split()
                         if len(SingleCommandList) > 0:
-                            for Flag in FlagDict.keys():
+                            for Flag in FlagDict:
                                 if '$('+ Flag +')' in SingleCommandList[0]:
                                     Tool = Flag
                                     break
                         if Tool:
+                            if 'PATH' not in self._AutoGenObject._BuildOption[Tool]:
+                                EdkLogger.error("build", AUTOGEN_ERROR, "%s_PATH doesn't exist in %s ToolChain and %s Arch." %(Tool, self._AutoGenObject.ToolChain, self._AutoGenObject.Arch), ExtraData="[%s]" % str(self._AutoGenObject))
                             SingleCommandLength += len(self._AutoGenObject._BuildOption[Tool]['PATH'])
                             for item in SingleCommandList[1:]:
                                 if FlagDict[Tool]['Macro'] in item:
+                                    if 'FLAGS' not in self._AutoGenObject._BuildOption[Tool]:
+                                        EdkLogger.error("build", AUTOGEN_ERROR, "%s_FLAGS doesn't exist in %s ToolChain and %s Arch." %(Tool, self._AutoGenObject.ToolChain, self._AutoGenObject.Arch), ExtraData="[%s]" % str(self._AutoGenObject))
                                     Str = self._AutoGenObject._BuildOption[Tool]['FLAGS']
-                                    for Option in self._AutoGenObject.BuildOption.keys():
+                                    for Option in self._AutoGenObject.BuildOption:
                                         for Attr in self._AutoGenObject.BuildOption[Option]:
                                             if Str.find(Option + '_' + Attr) != -1:
                                                 Str = Str.replace('$(' + Option + '_' + Attr + ')', self._AutoGenObject.BuildOption[Option][Attr])
                                     while(Str.find('$(') != -1):
-                                        for macro in self._AutoGenObject.Macros.keys():
+                                        for macro in self._AutoGenObject.Macros:
                                             MacroName = '$('+ macro + ')'
                                             if (Str.find(MacroName) != -1):
                                                 Str = Str.replace(MacroName, self._AutoGenObject.Macros[macro])
@@ -732,12 +822,12 @@ cleanlib:
                                     SingleCommandLength += self._AutoGenObject.IncludePathLength + len(IncPrefix) * len(self._AutoGenObject._IncludePathList)
                                 elif item.find('$(') != -1:
                                     Str = item
-                                    for Option in self._AutoGenObject.BuildOption.keys():
+                                    for Option in self._AutoGenObject.BuildOption:
                                         for Attr in self._AutoGenObject.BuildOption[Option]:
                                             if Str.find(Option + '_' + Attr) != -1:
                                                 Str = Str.replace('$(' + Option + '_' + Attr + ')', self._AutoGenObject.BuildOption[Option][Attr])
                                     while(Str.find('$(') != -1):
-                                        for macro in self._AutoGenObject.Macros.keys():
+                                        for macro in self._AutoGenObject.Macros:
                                             MacroName = '$('+ macro + ')'
                                             if (Str.find(MacroName) != -1):
                                                 Str = Str.replace(MacroName, self._AutoGenObject.Macros[macro])
@@ -750,19 +840,19 @@ cleanlib:
                                 FlagDict[Tool]['Value'] = True
 
                 # generate the response file content by combine the FLAGS and INC
-                for Flag in FlagDict.keys():
+                for Flag in FlagDict:
                     if FlagDict[Flag]['Value']:
                         Key = Flag + '_RESP'
                         RespMacro = FlagDict[Flag]['Macro'].replace('FLAGS', 'RESP')
                         Value = self._AutoGenObject.BuildOption[Flag]['FLAGS']
                         for inc in self._AutoGenObject._IncludePathList:
                             Value += ' ' + IncPrefix + inc
-                        for Option in self._AutoGenObject.BuildOption.keys():
+                        for Option in self._AutoGenObject.BuildOption:
                             for Attr in self._AutoGenObject.BuildOption[Option]:
                                 if Value.find(Option + '_' + Attr) != -1:
                                     Value = Value.replace('$(' + Option + '_' + Attr + ')', self._AutoGenObject.BuildOption[Option][Attr])
                         while (Value.find('$(') != -1):
-                            for macro in self._AutoGenObject.Macros.keys():
+                            for macro in self._AutoGenObject.Macros:
                                 MacroName = '$('+ macro + ')'
                                 if (Value.find(MacroName) != -1):
                                     Value = Value.replace(MacroName, self._AutoGenObject.Macros[macro])
@@ -815,12 +905,12 @@ cleanlib:
             # skip non-C files
             if File.Ext not in [".c", ".C"] or File.Name == "AutoGen.c":
                 continue
-            elif DepSet == None:
+            elif DepSet is None:
                 DepSet = set(self.FileDependency[File])
             else:
                 DepSet &= set(self.FileDependency[File])
         # in case nothing in SourceFileList
-        if DepSet == None:
+        if DepSet is None:
             DepSet = set()
         #
         # Extract common files list in the dependency files
@@ -871,6 +961,8 @@ cleanlib:
                 # Use file list macro as dependency
                 if T.GenFileListMacro:
                     Deps.append("$(%s)" % T.FileListMacro)
+                    if Type in [TAB_OBJECT_FILE, TAB_STATIC_LIBRARY]:
+                        Deps.append("$(%s)" % T.ListFileMacro)
 
                 TargetDict = {
                     "target"    :   self.PlaceMacro(T.Target.Path, self.Macros),
@@ -1423,7 +1515,7 @@ class TopLevelMakefile(BuildFile):
 
         # TRICK: for not generating GenFds call in makefile if no FDF file
         MacroList = []
-        if PlatformInfo.FdfFile != None and PlatformInfo.FdfFile != "":
+        if PlatformInfo.FdfFile is not None and PlatformInfo.FdfFile != "":
             FdfFileList = [PlatformInfo.FdfFile]
             # macros passed to GenFds
             MacroList.append('"%s=%s"' % ("EFI_SOURCE", GlobalData.gEfiSource.replace('\\', '\\\\')))
@@ -1453,22 +1545,20 @@ class TopLevelMakefile(BuildFile):
 
         if GlobalData.gCaseInsensitive:
             ExtraOption += " -c"
-
+        if GlobalData.gEnableGenfdsMultiThread:
+            ExtraOption += " --genfds-multi-thread"
         if GlobalData.gIgnoreSource:
             ExtraOption += " --ignore-sources"
 
-        if GlobalData.BuildOptionPcd:
-            for index, option in enumerate(GlobalData.gCommand):
-                if "--pcd" == option and GlobalData.gCommand[index+1]:
-                    pcdName, pcdValue = GlobalData.gCommand[index+1].split('=')
-                    if pcdValue.startswith('H'):
-                        pcdValue = 'H' + '"' + pcdValue[1:] + '"'
-                        ExtraOption += " --pcd " + pcdName + '=' + pcdValue
-                    elif pcdValue.startswith('L'):
-                        pcdValue = 'L' + '"' + pcdValue[1:] + '"'
-                        ExtraOption += " --pcd " + pcdName + '=' + pcdValue
-                    else:
-                        ExtraOption += " --pcd " + GlobalData.gCommand[index+1]
+        for pcd in GlobalData.BuildOptionPcd:
+            if pcd[2]:
+                pcdname = '.'.join(pcd[0:3])
+            else:
+                pcdname = '.'.join(pcd[0:2])
+            if pcd[3].startswith('{'):
+                ExtraOption += " --pcd " + pcdname + '=' + 'H' + '"' + pcd[3] + '"'
+            else:
+                ExtraOption += " --pcd " + pcdname + '=' + pcd[3]
 
         MakefileName = self._FILE_NAME_[self._FileType]
         SubBuildCommandList = []

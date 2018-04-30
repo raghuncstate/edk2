@@ -682,7 +682,7 @@ PciRootBridgeIoDumpInformation(
         break;
       }
       if (Temp != NULL) {
-        Temp2 = CatSPrint(RetVal, L"%s", Temp);
+        Temp2 = CatSPrint(RetVal, L"\r\n%s", Temp);
         FreePool(Temp);
         FreePool(RetVal);
         RetVal = Temp2;
@@ -690,7 +690,7 @@ PciRootBridgeIoDumpInformation(
       }
 
       Temp2 = CatSPrint(RetVal,
-        L"\r\n%%H%02x    %016lx  %016lx  %02x%%N",
+        L"%%H%02x    %016lx  %016lx  %02x%%N",
         Configuration->SpecificFlag,
         Configuration->AddrRangeMin,
         Configuration->AddrRangeMax,
@@ -2349,7 +2349,6 @@ STATIC CONST GUID_INFO_BLOCK mGuidStringList[] = {
   {STRING_TOKEN(STR_I2CEN),                 &gEfiI2cEnumerateProtocolGuid,                    NULL},
   {STRING_TOKEN(STR_I2C_H),                 &gEfiI2cHostProtocolGuid,                         NULL},
   {STRING_TOKEN(STR_I2C_BCM),               &gEfiI2cBusConfigurationManagementProtocolGuid,   NULL},
-  {STRING_TOKEN(STR_TREE),                  &gEfiTrEEProtocolGuid,                            NULL},
   {STRING_TOKEN(STR_TCG2),                  &gEfiTcg2ProtocolGuid,                            NULL},
   {STRING_TOKEN(STR_TIMESTAMP),             &gEfiTimestampProtocolGuid,                       NULL},
   {STRING_TOKEN(STR_RNG),                   &gEfiRngProtocolGuid,                             NULL},

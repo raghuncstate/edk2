@@ -1,7 +1,7 @@
 ## @file
 # Routines for generating AutoGen.h and AutoGen.c
 #
-# Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2007 - 2018, Intel Corporation. All rights reserved.<BR>
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
 # which accompanies this distribution.  The full text of the license may be found at
@@ -48,9 +48,9 @@ gDynamicPcd = [TAB_PCDS_DYNAMIC, TAB_PCDS_DYNAMIC_DEFAULT, TAB_PCDS_DYNAMIC_VPD,
 gDynamicExPcd = [TAB_PCDS_DYNAMIC_EX, TAB_PCDS_DYNAMIC_EX_DEFAULT, TAB_PCDS_DYNAMIC_EX_VPD, TAB_PCDS_DYNAMIC_EX_HII]
 
 ## Datum size
-gDatumSizeStringDatabase = {'UINT8':'8','UINT16':'16','UINT32':'32','UINT64':'64','BOOLEAN':'BOOLEAN','VOID*':'8'}
-gDatumSizeStringDatabaseH = {'UINT8':'8','UINT16':'16','UINT32':'32','UINT64':'64','BOOLEAN':'BOOL','VOID*':'PTR'}
-gDatumSizeStringDatabaseLib = {'UINT8':'8','UINT16':'16','UINT32':'32','UINT64':'64','BOOLEAN':'Bool','VOID*':'Ptr'}
+gDatumSizeStringDatabase = {TAB_UINT8:'8',TAB_UINT16:'16',TAB_UINT32:'32',TAB_UINT64:'64','BOOLEAN':'BOOLEAN',TAB_VOID:'8'}
+gDatumSizeStringDatabaseH = {TAB_UINT8:'8',TAB_UINT16:'16',TAB_UINT32:'32',TAB_UINT64:'64','BOOLEAN':'BOOL',TAB_VOID:'PTR'}
+gDatumSizeStringDatabaseLib = {TAB_UINT8:'8',TAB_UINT16:'16',TAB_UINT32:'32',TAB_UINT64:'64','BOOLEAN':'Bool',TAB_VOID:'Ptr'}
 
 ## AutoGen File Header Templates
 gAutoGenHeaderString = TemplateString("""\
@@ -811,7 +811,7 @@ def DynExPcdTokenNumberMapping(Info, AutoGenH):
     # AutoGen for each PCD listed in a [PcdEx] section of a Module/Lib INF file.
     # Auto generate a macro for each TokenName that takes a Guid pointer as a parameter.  
     # Use the Guid pointer to see if it matches any of the token space GUIDs.
-    TokenCNameList = []
+    TokenCNameList = set()
     for TokenCName in ExTokenCNameList:
         if TokenCName in TokenCNameList:
             continue
@@ -834,9 +834,9 @@ def DynExPcdTokenNumberMapping(Info, AutoGenH):
                                     % (Pcd.TokenSpaceGuidCName, Pcd.TokenSpaceGuidCName, RealTokenCName))
                 if Index == Count:
                     AutoGenH.Append('0 \\\n  )\n')
-                TokenCNameList.append(TokenCName)
+                TokenCNameList.add(TokenCName)
     
-    TokenCNameList = []
+    TokenCNameList = set()
     for TokenCName in ExTokenCNameList:
         if TokenCName in TokenCNameList:
             continue
@@ -866,10 +866,10 @@ def DynExPcdTokenNumberMapping(Info, AutoGenH):
                     #  COMPAREGUID() will only be used if the Guid passed in is local to the module.
                     AutoGenH.Append('#define _PCD_TOKEN_EX_%s(GuidPtr)   __PCD_%s_ADDR_CMP(GuidPtr) ? __PCD_%s_ADDR_CMP(GuidPtr) : __PCD_%s_VAL_CMP(GuidPtr)  \n'
                                     % (RealTokenCName, RealTokenCName, RealTokenCName, RealTokenCName))
-                TokenCNameList.append(TokenCName)
+                TokenCNameList.add(TokenCName)
 
 def GetPcdSize(Pcd):
-    if Pcd.DatumType == 'VOID*':
+    if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
         Value = Pcd.DefaultValue
         if Value in [None, '']:
             return 1
@@ -879,16 +879,18 @@ def GetPcdSize(Pcd):
             return len(Value.split(','))
         else:
             return len(Value) - 1
-    if Pcd.DatumType == 'UINT64':
+    if Pcd.DatumType == TAB_UINT64:
         return 8
-    if Pcd.DatumType == 'UINT32':
+    if Pcd.DatumType == TAB_UINT32:
         return 4
-    if Pcd.DatumType == 'UINT16':
+    if Pcd.DatumType == TAB_UINT16:
         return 2
-    if Pcd.DatumType == 'UINT8':
+    if Pcd.DatumType == TAB_UINT8:
         return 1
     if Pcd.DatumType == 'BOOLEAN':
         return 1
+    else:
+        return Pcd.MaxDatumSize
 
 
 ## Create code for module PCDs
@@ -912,13 +914,12 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
     PcdTokenName = '_PCD_TOKEN_' + TokenCName
     PatchPcdSizeTokenName = '_PCD_PATCHABLE_' + TokenCName +'_SIZE'
     PatchPcdSizeVariableName = '_gPcd_BinaryPatch_Size_' + TokenCName
+    PatchPcdMaxSizeVariable = '_gPcd_BinaryPatch_MaxSize_' + TokenCName
     FixPcdSizeTokenName = '_PCD_SIZE_' + TokenCName
+    FixedPcdSizeVariableName = '_gPcd_FixedAtBuild_Size_' + TokenCName
 
-    if GlobalData.BuildOptionPcd:
-        for PcdItem in GlobalData.BuildOptionPcd:
-            if (Pcd.TokenSpaceGuidCName, TokenCName) == (PcdItem[0], PcdItem[1]):
-                Pcd.DefaultValue = PcdItem[2]
-                break
+    if Pcd.PcdValueFromComm:
+        Pcd.DefaultValue = Pcd.PcdValueFromComm
     
     if Pcd.Type in gDynamicExPcd:
         TokenNumber = int(Pcd.TokenValue, 0)
@@ -951,36 +952,35 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
         EdkLogger.error("build", AUTOGEN_ERROR,
                         "Unknown PCD type [%s] of PCD %s.%s" % (Pcd.Type, Pcd.TokenSpaceGuidCName, TokenCName),
                         ExtraData="[%s]" % str(Info))
-    if Pcd.DatumType not in gDatumSizeStringDatabase:
-        EdkLogger.error("build", AUTOGEN_ERROR,
-                        "Unknown datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
-                        ExtraData="[%s]" % str(Info))
 
-    DatumSize = gDatumSizeStringDatabase[Pcd.DatumType]
-    DatumSizeLib = gDatumSizeStringDatabaseLib[Pcd.DatumType]
-    GetModeName = '_PCD_GET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName
-    SetModeName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName
-    SetModeStatusName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_S_' + TokenCName
+    DatumSize = gDatumSizeStringDatabase[Pcd.DatumType] if Pcd.DatumType in gDatumSizeStringDatabase else gDatumSizeStringDatabase[TAB_VOID]
+    DatumSizeLib = gDatumSizeStringDatabaseLib[Pcd.DatumType] if Pcd.DatumType in gDatumSizeStringDatabaseLib else gDatumSizeStringDatabaseLib[TAB_VOID]
+    GetModeName = '_PCD_GET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_GET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_' + TokenCName
+    SetModeName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_' + TokenCName
+    SetModeStatusName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_S_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_S_' + TokenCName
     GetModeSizeName = '_PCD_GET_MODE_SIZE' + '_' + TokenCName
     
-    PcdExCNameList  = []
     if Pcd.Type in gDynamicExPcd:
         if Info.IsLibrary:
             PcdList = Info.LibraryPcdList
         else:
             PcdList = Info.ModulePcdList
+        PcdExCNameTest = 0
         for PcdModule in PcdList:
-            if PcdModule.Type in gDynamicExPcd:
-                PcdExCNameList.append(PcdModule.TokenCName)
+            if PcdModule.Type in gDynamicExPcd and Pcd.TokenCName == PcdModule.TokenCName:
+                PcdExCNameTest += 1
+            # get out early once we found > 1...
+            if PcdExCNameTest > 1:
+                break
         # Be compatible with the current code which using PcdToken and PcdGet/Set for DynamicEx Pcd.
         # If only PcdToken and PcdGet/Set used in all Pcds with different CName, it should succeed to build.
         # If PcdToken and PcdGet/Set used in the Pcds with different Guids but same CName, it should failed to build.
-        if PcdExCNameList.count(Pcd.TokenCName) > 1:
+        if PcdExCNameTest > 1:
             AutoGenH.Append('// Disabled the macros, as PcdToken and PcdGet/Set are not allowed in the case that more than one DynamicEx Pcds are different Guids but same CName.\n')
             AutoGenH.Append('// #define %s  %s\n' % (PcdTokenName, PcdExTokenName))
             AutoGenH.Append('// #define %s  LibPcdGetEx%s(&%s, %s)\n' % (GetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             AutoGenH.Append('// #define %s  LibPcdGetExSize(&%s, %s)\n' % (GetModeSizeName,Pcd.TokenSpaceGuidCName, PcdTokenName))
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('// #define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%s(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
                 AutoGenH.Append('// #define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%sS(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             else:
@@ -990,26 +990,26 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
             AutoGenH.Append('#define %s  %s\n' % (PcdTokenName, PcdExTokenName))
             AutoGenH.Append('#define %s  LibPcdGetEx%s(&%s, %s)\n' % (GetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             AutoGenH.Append('#define %s LibPcdGetExSize(&%s, %s)\n' % (GetModeSizeName,Pcd.TokenSpaceGuidCName, PcdTokenName))
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%s(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%sS(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             else:
                 AutoGenH.Append('#define %s(Value)  LibPcdSetEx%s(&%s, %s, (Value))\n' % (SetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
                 AutoGenH.Append('#define %s(Value)  LibPcdSetEx%sS(&%s, %s, (Value))\n' % (SetModeStatusName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
     elif Pcd.Type in gDynamicPcd:
-        PcdList = []
-        PcdCNameList = []
-        PcdList.extend(Info.LibraryPcdList)
-        PcdList.extend(Info.ModulePcdList)
-        for PcdModule in PcdList:
-            if PcdModule.Type in gDynamicPcd:
-                PcdCNameList.append(PcdModule.TokenCName)
-        if PcdCNameList.count(Pcd.TokenCName) > 1:
+        PcdCNameTest = 0
+        for PcdModule in Info.LibraryPcdList + Info.ModulePcdList:
+            if PcdModule.Type in gDynamicPcd and Pcd.TokenCName == PcdModule.TokenCName:
+                PcdCNameTest += 1
+            # get out early once we found > 1...
+            if PcdCNameTest > 1:
+                break
+        if PcdCNameTest > 1:
             EdkLogger.error("build", AUTOGEN_ERROR, "More than one Dynamic Pcds [%s] are different Guids but same CName. They need to be changed to DynamicEx type to avoid the confliction.\n" % (TokenCName), ExtraData="[%s]" % str(Info.MetaFile.Path))
         else:
             AutoGenH.Append('#define %s  LibPcdGet%s(%s)\n' % (GetModeName, DatumSizeLib, PcdTokenName))
             AutoGenH.Append('#define %s  LibPcdGetSize(%s)\n' % (GetModeSizeName, PcdTokenName))
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSet%s(%s, (SizeOfBuffer), (Buffer))\n' %(SetModeName, DatumSizeLib, PcdTokenName))
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSet%sS(%s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, PcdTokenName))
             else:
@@ -1033,17 +1033,16 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
             elif BoolValue == 'FALSE' or BoolValue == '0':
                 Value = '0U'
 
-        if Pcd.DatumType in ['UINT64', 'UINT32', 'UINT16', 'UINT8']:
+        if Pcd.DatumType in TAB_PCD_CLEAN_NUMERIC_TYPES:
             try:
-                if Value.upper().startswith('0X'):
-                    ValueNumber = int (Value, 16)
-                else:
-                    ValueNumber = int (Value)
+                if Value.upper().endswith('L'):
+                    Value = Value[:-1]
+                ValueNumber = int (Value, 0)
             except:
                 EdkLogger.error("build", AUTOGEN_ERROR,
                                 "PCD value is not valid dec or hex number for datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
                                 ExtraData="[%s]" % str(Info))
-            if Pcd.DatumType == 'UINT64':
+            if Pcd.DatumType == TAB_UINT64:
                 if ValueNumber < 0:
                     EdkLogger.error("build", AUTOGEN_ERROR,
                                     "PCD can't be set to negative value for datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
@@ -1054,7 +1053,7 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
                                     ExtraData="[%s]" % str(Info))
                 if not Value.endswith('ULL'):
                     Value += 'ULL'
-            elif Pcd.DatumType == 'UINT32':
+            elif Pcd.DatumType == TAB_UINT32:
                 if ValueNumber < 0:
                     EdkLogger.error("build", AUTOGEN_ERROR,
                                     "PCD can't be set to negative value for datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
@@ -1065,7 +1064,7 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
                                     ExtraData="[%s]" % str(Info))
                 if not Value.endswith('U'):
                     Value += 'U'
-            elif Pcd.DatumType == 'UINT16':
+            elif Pcd.DatumType == TAB_UINT16:
                 if ValueNumber < 0:
                     EdkLogger.error("build", AUTOGEN_ERROR,
                                     "PCD can't be set to negative value for datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
@@ -1076,7 +1075,7 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
                                     ExtraData="[%s]" % str(Info))
                 if not Value.endswith('U'):
                     Value += 'U'                    
-            elif Pcd.DatumType == 'UINT8':
+            elif Pcd.DatumType == TAB_UINT8:
                 if ValueNumber < 0:
                     EdkLogger.error("build", AUTOGEN_ERROR,
                                     "PCD can't be set to negative value for datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
@@ -1087,8 +1086,8 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
                                     ExtraData="[%s]" % str(Info))
                 if not Value.endswith('U'):
                     Value += 'U'
-        if Pcd.DatumType == 'VOID*':
-            if Pcd.MaxDatumSize == None or Pcd.MaxDatumSize == '':
+        if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
+            if Pcd.MaxDatumSize is None or Pcd.MaxDatumSize == '':
                 EdkLogger.error("build", AUTOGEN_ERROR,
                                 "Unknown [MaxDatumSize] of PCD [%s.%s]" % (Pcd.TokenSpaceGuidCName, TokenCName),
                                 ExtraData="[%s]" % str(Info))
@@ -1111,48 +1110,62 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
                     ArraySize = ArraySize / 2;
 
                 if ArraySize < (len(Value) + 1):
-                    EdkLogger.error("build", AUTOGEN_ERROR,
+                    if Pcd.MaxSizeUserSet:
+                        EdkLogger.error("build", AUTOGEN_ERROR,
                                     "The maximum size of VOID* type PCD '%s.%s' is less than its actual size occupied." % (Pcd.TokenSpaceGuidCName, TokenCName),
                                     ExtraData="[%s]" % str(Info))
+                    else:
+                        ArraySize = GetPcdSize(Pcd)
+                        if Unicode:
+                            ArraySize = ArraySize / 2
                 Value = NewValue + '0 }'
             Array = '[%d]' % ArraySize
         #
         # skip casting for fixed at build since it breaks ARM assembly.
         # Long term we need PCD macros that work in assembly
         #
-        elif Pcd.Type != TAB_PCDS_FIXED_AT_BUILD:
+        elif Pcd.Type != TAB_PCDS_FIXED_AT_BUILD and Pcd.DatumType in TAB_PCD_NUMERIC_TYPES_VOID:
             Value = "((%s)%s)" % (Pcd.DatumType, Value)
+
+        if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES_VOID:
+            # handle structure PCD
+            if Pcd.MaxDatumSize is None or Pcd.MaxDatumSize == '':
+                EdkLogger.error("build", AUTOGEN_ERROR,
+                                "Unknown [MaxDatumSize] of PCD [%s.%s]" % (Pcd.TokenSpaceGuidCName, TokenCName),
+                                ExtraData="[%s]" % str(Info))
+
+            ArraySize = int(Pcd.MaxDatumSize, 0)
+            Array = '[%d]' % ArraySize
 
         if Pcd.Type == TAB_PCDS_PATCHABLE_IN_MODULE:
             PcdValueName = '_PCD_PATCHABLE_VALUE_' + TokenCName
         else:
             PcdValueName = '_PCD_VALUE_' + TokenCName
             
-        if Pcd.DatumType == 'VOID*':
+        if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
             #
             # For unicode, UINT16 array will be generated, so the alignment of unicode is guaranteed.
             #
+            AutoGenH.Append('#define %s  %s%s\n' %(PcdValueName, Type, PcdVariableName))
             if Unicode:
-                AutoGenH.Append('#define %s  %s%s\n' %(PcdValueName, Type, PcdVariableName))
                 AutoGenC.Append('GLOBAL_REMOVE_IF_UNREFERENCED %s UINT16 %s%s = %s;\n' % (Const, PcdVariableName, Array, Value))
                 AutoGenH.Append('extern %s UINT16 %s%s;\n' %(Const, PcdVariableName, Array))
-                AutoGenH.Append('#define %s  %s%s\n' %(GetModeName, Type, PcdVariableName))
             else:
-                AutoGenH.Append('#define %s  %s%s\n' %(PcdValueName, Type, PcdVariableName))
                 AutoGenC.Append('GLOBAL_REMOVE_IF_UNREFERENCED %s UINT8 %s%s = %s;\n' % (Const, PcdVariableName, Array, Value))
                 AutoGenH.Append('extern %s UINT8 %s%s;\n' %(Const, PcdVariableName, Array))
-                AutoGenH.Append('#define %s  %s%s\n' %(GetModeName, Type, PcdVariableName))
+            AutoGenH.Append('#define %s  %s%s\n' %(GetModeName, Type, PcdVariableName))
                 
             PcdDataSize = GetPcdSize(Pcd)
             if Pcd.Type == TAB_PCDS_FIXED_AT_BUILD:
                 AutoGenH.Append('#define %s %s\n' % (FixPcdSizeTokenName, PcdDataSize))
                 AutoGenH.Append('#define %s  %s \n' % (GetModeSizeName,FixPcdSizeTokenName))
-            
+                AutoGenC.Append('GLOBAL_REMOVE_IF_UNREFERENCED const UINTN %s = %s;\n' % (FixedPcdSizeVariableName,PcdDataSize))
             if Pcd.Type == TAB_PCDS_PATCHABLE_IN_MODULE:
                 AutoGenH.Append('#define %s %s\n' % (PatchPcdSizeTokenName, Pcd.MaxDatumSize))
                 AutoGenH.Append('#define %s  %s \n' % (GetModeSizeName,PatchPcdSizeVariableName))
                 AutoGenH.Append('extern UINTN %s; \n' % PatchPcdSizeVariableName)
                 AutoGenC.Append('GLOBAL_REMOVE_IF_UNREFERENCED UINTN %s = %s;\n' % (PatchPcdSizeVariableName,PcdDataSize))
+                AutoGenC.Append('GLOBAL_REMOVE_IF_UNREFERENCED const UINTN %s = %s;\n' % (PatchPcdMaxSizeVariable,Pcd.MaxDatumSize))
         elif Pcd.Type == TAB_PCDS_PATCHABLE_IN_MODULE:
             AutoGenH.Append('#define %s  %s\n' %(PcdValueName, Value))
             AutoGenC.Append('volatile %s %s %s = %s;\n' %(Const, Pcd.DatumType, PcdVariableName, PcdValueName))
@@ -1176,7 +1189,7 @@ def CreateModulePcdCode(Info, AutoGenC, AutoGenH, Pcd):
             AutoGenH.Append('#define %s  %s%s\n' % (GetModeName, Type, PcdVariableName))
 
         if Pcd.Type == TAB_PCDS_PATCHABLE_IN_MODULE:
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSize((VOID *)_gPcd_BinaryPatch_%s, &_gPcd_BinaryPatch_Size_%s, (UINTN)_PCD_PATCHABLE_%s_SIZE, (SizeOfBuffer), (Buffer))\n' % (SetModeName, Pcd.TokenCName, Pcd.TokenCName, Pcd.TokenCName))
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSizeS((VOID *)_gPcd_BinaryPatch_%s, &_gPcd_BinaryPatch_Size_%s, (UINTN)_PCD_PATCHABLE_%s_SIZE, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, Pcd.TokenCName, Pcd.TokenCName, Pcd.TokenCName))
             else:
@@ -1204,13 +1217,11 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
     FixPcdSizeTokenName = '_PCD_SIZE_' + TokenCName
     PatchPcdSizeTokenName = '_PCD_PATCHABLE_' + TokenCName +'_SIZE'
     PatchPcdSizeVariableName = '_gPcd_BinaryPatch_Size_' + TokenCName
+    PatchPcdMaxSizeVariable = '_gPcd_BinaryPatch_MaxSize_' + TokenCName
+    FixedPcdSizeVariableName = '_gPcd_FixedAtBuild_Size_' + TokenCName
 
-    if GlobalData.BuildOptionPcd:
-        for PcdItem in GlobalData.BuildOptionPcd:
-            if (Pcd.TokenSpaceGuidCName, TokenCName) == (PcdItem[0], PcdItem[1]):
-                Pcd.DefaultValue = PcdItem[2]
-                break
-
+    if Pcd.PcdValueFromComm:
+        Pcd.DefaultValue = Pcd.PcdValueFromComm
     #
     # Write PCDs
     #
@@ -1239,27 +1250,22 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
         EdkLogger.error("build", AUTOGEN_ERROR,
                         "Unknown PCD type [%s] of PCD %s.%s" % (Pcd.Type, Pcd.TokenSpaceGuidCName, TokenCName),
                         ExtraData="[%s]" % str(Info))
-    if Pcd.DatumType not in gDatumSizeStringDatabase:
-        EdkLogger.error("build", AUTOGEN_ERROR,
-                        "Unknown datum type [%s] of PCD %s.%s" % (Pcd.DatumType, Pcd.TokenSpaceGuidCName, TokenCName),
-                        ExtraData="[%s]" % str(Info))
 
     DatumType   = Pcd.DatumType
-    DatumSize   = gDatumSizeStringDatabaseH[DatumType]
-    DatumSizeLib= gDatumSizeStringDatabaseLib[DatumType]
-    GetModeName = '_PCD_GET_MODE_' + DatumSize + '_' + TokenCName
-    SetModeName = '_PCD_SET_MODE_' + DatumSize + '_' + TokenCName
-    SetModeStatusName = '_PCD_SET_MODE_' + DatumSize + '_S_' + TokenCName
+    DatumSize = gDatumSizeStringDatabase[Pcd.DatumType] if Pcd.DatumType in gDatumSizeStringDatabase else gDatumSizeStringDatabase[TAB_VOID]
+    DatumSizeLib = gDatumSizeStringDatabaseLib[Pcd.DatumType] if Pcd.DatumType in gDatumSizeStringDatabaseLib else gDatumSizeStringDatabaseLib[TAB_VOID]
+    GetModeName = '_PCD_GET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_GET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_' + TokenCName
+    SetModeName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_' + TokenCName
+    SetModeStatusName = '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[Pcd.DatumType] + '_S_' + TokenCName if Pcd.DatumType in gDatumSizeStringDatabaseH else '_PCD_SET_MODE_' + gDatumSizeStringDatabaseH[TAB_VOID] + '_S_' + TokenCName
     GetModeSizeName = '_PCD_GET_MODE_SIZE' + '_' + TokenCName
 
     Type = ''
     Array = ''
-    if Pcd.DatumType == 'VOID*':
+    if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
         if Pcd.DefaultValue[0]== '{':
             Type = '(VOID *)'
         Array = '[]'
     PcdItemType = Pcd.Type
-    PcdExCNameList  = []
     if PcdItemType in gDynamicExPcd:
         PcdExTokenName = '_PCD_TOKEN_' + TokenSpaceGuidCName + '_' + TokenCName
         AutoGenH.Append('\n#define %s  %dU\n' % (PcdExTokenName, TokenNumber))
@@ -1268,18 +1274,22 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
             PcdList = Info.LibraryPcdList
         else:
             PcdList = Info.ModulePcdList
+        PcdExCNameTest = 0
         for PcdModule in PcdList:
-            if PcdModule.Type in gDynamicExPcd:
-                PcdExCNameList.append(PcdModule.TokenCName)
+            if PcdModule.Type in gDynamicExPcd and Pcd.TokenCName == PcdModule.TokenCName:
+                PcdExCNameTest += 1
+            # get out early once we found > 1...
+            if PcdExCNameTest > 1:
+                break
         # Be compatible with the current code which using PcdGet/Set for DynamicEx Pcd.
         # If only PcdGet/Set used in all Pcds with different CName, it should succeed to build.
         # If PcdGet/Set used in the Pcds with different Guids but same CName, it should failed to build.
-        if PcdExCNameList.count(Pcd.TokenCName) > 1:
+        if PcdExCNameTest > 1:
             AutoGenH.Append('// Disabled the macros, as PcdToken and PcdGet/Set are not allowed in the case that more than one DynamicEx Pcds are different Guids but same CName.\n')
             AutoGenH.Append('// #define %s  %s\n' % (PcdTokenName, PcdExTokenName))
             AutoGenH.Append('// #define %s  LibPcdGetEx%s(&%s, %s)\n' % (GetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             AutoGenH.Append('// #define %s  LibPcdGetExSize(&%s, %s)\n' % (GetModeSizeName,Pcd.TokenSpaceGuidCName, PcdTokenName))
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('// #define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%s(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
                 AutoGenH.Append('// #define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%sS(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             else:
@@ -1289,7 +1299,7 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
             AutoGenH.Append('#define %s  %s\n' % (PcdTokenName, PcdExTokenName))
             AutoGenH.Append('#define %s  LibPcdGetEx%s(&%s, %s)\n' % (GetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             AutoGenH.Append('#define %s LibPcdGetExSize(&%s, %s)\n' % (GetModeSizeName,Pcd.TokenSpaceGuidCName, PcdTokenName))
-            if Pcd.DatumType == 'VOID*':
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%s(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSetEx%sS(&%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, Pcd.TokenSpaceGuidCName, PcdTokenName))
             else:
@@ -1310,29 +1320,30 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
         else:
             AutoGenH.Append('#define %s  LibPcdGet%s(%s)\n' % (GetModeName, DatumSizeLib, PcdTokenName))
             AutoGenH.Append('#define %s  LibPcdGetSize(%s)\n' % (GetModeSizeName, PcdTokenName))
-            if DatumType == 'VOID*':
+            if DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSet%s(%s, (SizeOfBuffer), (Buffer))\n' %(SetModeName, DatumSizeLib, PcdTokenName))
                 AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPcdSet%sS(%s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, DatumSizeLib, PcdTokenName))
             else:
                 AutoGenH.Append('#define %s(Value)  LibPcdSet%s(%s, (Value))\n' % (SetModeName, DatumSizeLib, PcdTokenName))
                 AutoGenH.Append('#define %s(Value)  LibPcdSet%sS(%s, (Value))\n' % (SetModeStatusName, DatumSizeLib, PcdTokenName))
     if PcdItemType == TAB_PCDS_PATCHABLE_IN_MODULE:
+        GetModeMaxSizeName = '_PCD_GET_MODE_MAXSIZE' + '_' + TokenCName
         PcdVariableName = '_gPcd_' + gItemTypeStringDatabase[TAB_PCDS_PATCHABLE_IN_MODULE] + '_' + TokenCName
-        if DatumType == 'VOID*':
-            ArraySize = int(Pcd.MaxDatumSize, 0)
-            if Pcd.DefaultValue[0] == 'L':
-                ArraySize = ArraySize / 2
-            Array = '[%d]' % ArraySize
-            DatumType = ['UINT8', 'UINT16'][Pcd.DefaultValue[0] == 'L']
+        if DatumType not in TAB_PCD_NUMERIC_TYPES:
+            if DatumType == TAB_VOID and Array == '[]':
+                DatumType = [TAB_UINT8, TAB_UINT16][Pcd.DefaultValue[0] == 'L']
+            else:
+                DatumType = TAB_UINT8
             AutoGenH.Append('extern %s _gPcd_BinaryPatch_%s%s;\n' %(DatumType, TokenCName, Array))
         else:
             AutoGenH.Append('extern volatile  %s  %s%s;\n' % (DatumType, PcdVariableName, Array))
         AutoGenH.Append('#define %s  %s_gPcd_BinaryPatch_%s\n' %(GetModeName, Type, TokenCName))
         PcdDataSize = GetPcdSize(Pcd)
-        if Pcd.DatumType == 'VOID*':
-            AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSize((VOID *)_gPcd_BinaryPatch_%s, &_gPcd_BinaryPatch_Size_%s, (UINTN)_PCD_PATCHABLE_%s_SIZE, (SizeOfBuffer), (Buffer))\n' % (SetModeName, TokenCName, TokenCName, TokenCName))
-            AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSizeS((VOID *)_gPcd_BinaryPatch_%s, &_gPcd_BinaryPatch_Size_%s, (UINTN)_PCD_PATCHABLE_%s_SIZE, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, TokenCName, TokenCName, TokenCName))
-            AutoGenH.Append('#define %s %s\n' % (PatchPcdSizeTokenName, Pcd.MaxDatumSize))
+        if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
+            AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSize((VOID *)_gPcd_BinaryPatch_%s, &%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeName, TokenCName, PatchPcdSizeVariableName, PatchPcdMaxSizeVariable))
+            AutoGenH.Append('#define %s(SizeOfBuffer, Buffer)  LibPatchPcdSetPtrAndSizeS((VOID *)_gPcd_BinaryPatch_%s, &%s, %s, (SizeOfBuffer), (Buffer))\n' % (SetModeStatusName, TokenCName, PatchPcdSizeVariableName, PatchPcdMaxSizeVariable))
+            AutoGenH.Append('#define %s %s\n' % (GetModeMaxSizeName, PatchPcdMaxSizeVariable))
+            AutoGenH.Append('extern const UINTN %s; \n' % PatchPcdMaxSizeVariable)
         else:
             AutoGenH.Append('#define %s(Value)  (%s = (Value))\n' % (SetModeName, PcdVariableName))
             AutoGenH.Append('#define %s(Value)  ((%s = (Value)), RETURN_SUCCESS)\n' % (SetModeStatusName, PcdVariableName))
@@ -1344,22 +1355,36 @@ def CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd):
     if PcdItemType == TAB_PCDS_FIXED_AT_BUILD or PcdItemType == TAB_PCDS_FEATURE_FLAG:
         key = ".".join((Pcd.TokenSpaceGuidCName,Pcd.TokenCName))
         PcdVariableName = '_gPcd_' + gItemTypeStringDatabase[Pcd.Type] + '_' + TokenCName
-        if DatumType == 'VOID*' and Array == '[]':
-            DatumType = ['UINT8', 'UINT16'][Pcd.DefaultValue[0] == 'L']
+        if DatumType == TAB_VOID and Array == '[]':
+            DatumType = [TAB_UINT8, TAB_UINT16][Pcd.DefaultValue[0] == 'L']
+        if DatumType not in TAB_PCD_NUMERIC_TYPES_VOID:
+            DatumType = TAB_UINT8
         AutoGenH.Append('extern const %s _gPcd_FixedAtBuild_%s%s;\n' %(DatumType, TokenCName, Array))
         AutoGenH.Append('#define %s  %s_gPcd_FixedAtBuild_%s\n' %(GetModeName, Type, TokenCName))
         AutoGenH.Append('//#define %s  ASSERT(FALSE)  // It is not allowed to set value for a FIXED_AT_BUILD PCD\n' % SetModeName)
         
+        ConstFixedPcd = False
         if PcdItemType == TAB_PCDS_FIXED_AT_BUILD and (key in Info.ConstPcd or (Info.IsLibrary and not Info._ReferenceModules)):
-            if  Pcd.DatumType == 'VOID*':
+            ConstFixedPcd = True
+            if key in Info.ConstPcd:
+                Pcd.DefaultValue = Info.ConstPcd[key]
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
                 AutoGenH.Append('#define _PCD_VALUE_%s %s%s\n' %(TokenCName, Type, PcdVariableName))
             else:
                 AutoGenH.Append('#define _PCD_VALUE_%s %s\n' %(TokenCName, Pcd.DefaultValue))
-        
+        PcdDataSize = GetPcdSize(Pcd)
         if PcdItemType == TAB_PCDS_FIXED_AT_BUILD:
-            PcdDataSize = GetPcdSize(Pcd)
-            AutoGenH.Append('#define %s %s\n' % (FixPcdSizeTokenName, PcdDataSize))
-            AutoGenH.Append('#define %s %s\n' % (GetModeSizeName,FixPcdSizeTokenName))
+            if Pcd.DatumType not in TAB_PCD_NUMERIC_TYPES:
+                if ConstFixedPcd:
+                    AutoGenH.Append('#define %s %s\n' % (FixPcdSizeTokenName, PcdDataSize))
+                    AutoGenH.Append('#define %s %s\n' % (GetModeSizeName,FixPcdSizeTokenName))
+                else:
+                    AutoGenH.Append('#define %s %s\n' % (GetModeSizeName,FixedPcdSizeVariableName))
+                    AutoGenH.Append('#define %s %s\n' % (FixPcdSizeTokenName,FixedPcdSizeVariableName))
+                    AutoGenH.Append('extern const UINTN %s; \n' % FixedPcdSizeVariableName)
+            else:
+                AutoGenH.Append('#define %s %s\n' % (FixPcdSizeTokenName, PcdDataSize))
+                AutoGenH.Append('#define %s %s\n' % (GetModeSizeName,FixPcdSizeTokenName))
 
 ## Create code for library constructor
 #
@@ -1513,7 +1538,7 @@ def CreateModuleEntryPointCode(Info, AutoGenC, AutoGenH):
     }
 
     if Info.ModuleType in ['PEI_CORE', 'DXE_CORE', 'SMM_CORE', 'MM_CORE_STANDALONE']:
-        if Info.SourceFileList <> None and Info.SourceFileList <> []:
+        if Info.SourceFileList:
           if NumEntryPoints != 1:
               EdkLogger.error(
                   "build",
@@ -1671,8 +1696,11 @@ def CreatePcdCode(Info, AutoGenC, AutoGenH):
         if Pcd.Type in gDynamicExPcd and Pcd.TokenSpaceGuidCName not in TokenSpaceList:
             TokenSpaceList += [Pcd.TokenSpaceGuidCName]
             
+    SkuMgr = Info.Workspace.Platform.SkuIdMgr
+    AutoGenH.Append("\n// Definition of SkuId Array\n")
+    AutoGenH.Append("extern UINT64 _gPcd_SkuId_Array[];\n")
     # Add extern declarations to AutoGen.h if one or more Token Space GUIDs were found
-    if TokenSpaceList <> []:            
+    if TokenSpaceList:
         AutoGenH.Append("\n// Definition of PCD Token Space GUIDs used in this module\n\n")
         if Info.ModuleType in ["USER_DEFINED", "BASE"]:
             GuidType = "GUID"
@@ -1688,6 +1716,8 @@ def CreatePcdCode(Info, AutoGenC, AutoGenH):
             CreateLibraryPcdCode(Info, AutoGenC, AutoGenH, Pcd)
         DynExPcdTokenNumberMapping (Info, AutoGenH)
     else:
+        AutoGenC.Append("\n// Definition of SkuId Array\n")
+        AutoGenC.Append("GLOBAL_REMOVE_IF_UNREFERENCED UINT64 _gPcd_SkuId_Array[] = %s;\n" % SkuMgr.DumpSkuIdArrary())
         if Info.ModulePcdList:
             AutoGenH.Append("\n// Definition of PCDs used in this module\n")
             AutoGenC.Append("\n// Definition of PCDs used in this module\n")

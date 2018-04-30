@@ -1119,7 +1119,7 @@ StrnCpy (
   IN      CONST CHAR16              *Source,
   IN      UINTN                     Length
   );
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Returns the length of a Null-terminated Unicode string.
@@ -1338,7 +1338,7 @@ StrnCat (
   IN      CONST CHAR16              *Source,
   IN      UINTN                     Length
   );
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Returns the first occurrence of a Null-terminated Unicode sub-string
@@ -1811,7 +1811,7 @@ UnicodeStrToAsciiStr (
   OUT     CHAR8                     *Destination
   );
 
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Convert a Null-terminated Unicode string to a Null-terminated
@@ -1985,7 +1985,7 @@ AsciiStrnCpy (
   IN      CONST CHAR8               *Source,
   IN      UINTN                     Length
   );
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Returns the length of a Null-terminated ASCII string.
@@ -2229,7 +2229,7 @@ AsciiStrnCat (
   IN      CONST CHAR8               *Source,
   IN      UINTN                     Length
   );
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Returns the first occurrence of a Null-terminated ASCII sub-string
@@ -2670,7 +2670,7 @@ AsciiStrToUnicodeStr (
   OUT     CHAR16                    *Destination
   );
 
-#endif
+#endif // !defined (DISABLE_NEW_DEPRECATED_INTERFACES)
 
 /**
   Convert one Null-terminated ASCII string to a Null-terminated
@@ -4903,6 +4903,7 @@ MemoryFence (
   @retval 0 Indicates a return from SetJump().
 
 **/
+RETURNS_TWICE
 UINTN
 EFIAPI
 SetJump (
@@ -6494,7 +6495,7 @@ AsmPalCall (
   IN UINT64  Arg3,
   IN UINT64  Arg4
   );
-#endif
+#endif // defined (MDE_CPU_IPF)
 
 #if defined (MDE_CPU_IA32) || defined (MDE_CPU_X64)
 ///
@@ -6647,6 +6648,8 @@ typedef struct {
 #define IA32_IDT_GATE_TYPE_INTERRUPT_32  0x8E
 #define IA32_IDT_GATE_TYPE_TRAP_32       0x8F
 
+#define IA32_GDT_TYPE_TSS               0x9
+#define IA32_GDT_ALIGNMENT              8
 
 #if defined (MDE_CPU_IA32)
 ///
@@ -6663,7 +6666,71 @@ typedef union {
   UINT64  Uint64;
 } IA32_IDT_GATE_DESCRIPTOR;
 
-#endif
+#pragma pack (1)
+//
+// IA32 Task-State Segment Definition
+//
+typedef struct {
+  UINT16    PreviousTaskLink;
+  UINT16    Reserved_2;
+  UINT32    ESP0;
+  UINT16    SS0;
+  UINT16    Reserved_10;
+  UINT32    ESP1;
+  UINT16    SS1;
+  UINT16    Reserved_18;
+  UINT32    ESP2;
+  UINT16    SS2;
+  UINT16    Reserved_26;
+  UINT32    CR3;
+  UINT32    EIP;
+  UINT32    EFLAGS;
+  UINT32    EAX;
+  UINT32    ECX;
+  UINT32    EDX;
+  UINT32    EBX;
+  UINT32    ESP;
+  UINT32    EBP;
+  UINT32    ESI;
+  UINT32    EDI;
+  UINT16    ES;
+  UINT16    Reserved_74;
+  UINT16    CS;
+  UINT16    Reserved_78;
+  UINT16    SS;
+  UINT16    Reserved_82;
+  UINT16    DS;
+  UINT16    Reserved_86;
+  UINT16    FS;
+  UINT16    Reserved_90;
+  UINT16    GS;
+  UINT16    Reserved_94;
+  UINT16    LDTSegmentSelector;
+  UINT16    Reserved_98;
+  UINT16    T;
+  UINT16    IOMapBaseAddress;
+} IA32_TASK_STATE_SEGMENT;
+
+typedef union {
+  struct {
+    UINT32  LimitLow:16;    ///< Segment Limit 15..00
+    UINT32  BaseLow:16;     ///< Base Address  15..00
+    UINT32  BaseMid:8;      ///< Base Address  23..16
+    UINT32  Type:4;         ///< Type (1 0 B 1)
+    UINT32  Reserved_43:1;  ///< 0
+    UINT32  DPL:2;          ///< Descriptor Privilege Level
+    UINT32  P:1;            ///< Segment Present
+    UINT32  LimitHigh:4;    ///< Segment Limit 19..16
+    UINT32  AVL:1;          ///< Available for use by system software
+    UINT32  Reserved_52:2;  ///< 0 0
+    UINT32  G:1;            ///< Granularity
+    UINT32  BaseHigh:8;     ///< Base Address 31..24
+  } Bits;
+  UINT64  Uint64;
+} IA32_TSS_DESCRIPTOR;
+#pragma pack ()
+
+#endif // defined (MDE_CPU_IA32)
 
 #if defined (MDE_CPU_X64)
 ///
@@ -6685,7 +6752,47 @@ typedef union {
   } Uint128;   
 } IA32_IDT_GATE_DESCRIPTOR;
 
-#endif
+#pragma pack (1)
+//
+// IA32 Task-State Segment Definition
+//
+typedef struct {
+  UINT32    Reserved_0;
+  UINT64    RSP0;
+  UINT64    RSP1;
+  UINT64    RSP2;
+  UINT64    Reserved_28;
+  UINT64    IST[7];
+  UINT64    Reserved_92;
+  UINT16    Reserved_100;
+  UINT16    IOMapBaseAddress;
+} IA32_TASK_STATE_SEGMENT;
+
+typedef union {
+  struct {
+    UINT32  LimitLow:16;    ///< Segment Limit 15..00
+    UINT32  BaseLow:16;     ///< Base Address  15..00
+    UINT32  BaseMidl:8;     ///< Base Address  23..16
+    UINT32  Type:4;         ///< Type (1 0 B 1)
+    UINT32  Reserved_43:1;  ///< 0
+    UINT32  DPL:2;          ///< Descriptor Privilege Level
+    UINT32  P:1;            ///< Segment Present
+    UINT32  LimitHigh:4;    ///< Segment Limit 19..16
+    UINT32  AVL:1;          ///< Available for use by system software
+    UINT32  Reserved_52:2;  ///< 0 0
+    UINT32  G:1;            ///< Granularity
+    UINT32  BaseMidh:8;     ///< Base Address  31..24
+    UINT32  BaseHigh:32;    ///< Base Address  63..32
+    UINT32  Reserved_96:32; ///< Reserved
+  } Bits;
+  struct {
+    UINT64  Uint64;
+    UINT64  Uint64_1;
+  } Uint128;
+} IA32_TSS_DESCRIPTOR;
+#pragma pack ()
+
+#endif // defined (MDE_CPU_X64)
 
 ///
 /// Byte packed structure for an FP/SSE/SSE2 context.
@@ -6773,6 +6880,20 @@ typedef struct {
 #define THUNK_ATTRIBUTE_BIG_REAL_MODE             0x00000001
 #define THUNK_ATTRIBUTE_DISABLE_A20_MASK_INT_15   0x00000002
 #define THUNK_ATTRIBUTE_DISABLE_A20_MASK_KBD_CTRL 0x00000004
+
+///
+/// Type definition for representing labels in NASM source code that allow for
+/// the patching of immediate operands of IA32 and X64 instructions.
+///
+/// While the type is technically defined as a function type (note: not a
+/// pointer-to-function type), such labels in NASM source code never stand for
+/// actual functions, and identifiers declared with this function type should
+/// never be called. This is also why the EFIAPI calling convention specifier
+/// is missing from the typedef, and why the typedef does not follow the usual
+/// edk2 coding style for function (or pointer-to-function) typedefs. The VOID
+/// return type and the VOID argument list are merely artifacts.
+///
+typedef VOID (X86_ASSEMBLY_PATCH_LABEL) (VOID);
 
 /**
   Retrieves CPUID information.
@@ -8950,7 +9071,58 @@ AsmRdRand64  (
   OUT     UINT64                    *Rand
   );
 
-#endif
-#endif
+/**
+  Load given selector into TR register.
 
+  @param[in] Selector     Task segment selector
+**/
+VOID
+EFIAPI
+AsmWriteTr (
+  IN UINT16 Selector
+  );
 
+/**
+  Patch the immediate operand of an IA32 or X64 instruction such that the byte,
+  word, dword or qword operand is encoded at the end of the instruction's
+  binary representation.
+
+  This function should be used to update object code that was compiled with
+  NASM from assembly source code. Example:
+
+  NASM source code:
+
+        mov     eax, strict dword 0 ; the imm32 zero operand will be patched
+    ASM_PFX(gPatchCr3):
+        mov     cr3, eax
+
+  C source code:
+
+    X86_ASSEMBLY_PATCH_LABEL gPatchCr3;
+    PatchInstructionX86 (gPatchCr3, AsmReadCr3 (), 4);
+
+  @param[out] InstructionEnd  Pointer right past the instruction to patch. The
+                              immediate operand to patch is expected to
+                              comprise the trailing bytes of the instruction.
+                              If InstructionEnd is closer to address 0 than
+                              ValueSize permits, then ASSERT().
+
+  @param[in] PatchValue       The constant to write to the immediate operand.
+                              The caller is responsible for ensuring that
+                              PatchValue can be represented in the byte, word,
+                              dword or qword operand (as indicated through
+                              ValueSize); otherwise ASSERT().
+
+  @param[in] ValueSize        The size of the operand in bytes; must be 1, 2,
+                              4, or 8. ASSERT() otherwise.
+**/
+VOID
+EFIAPI
+PatchInstructionX86 (
+  OUT X86_ASSEMBLY_PATCH_LABEL *InstructionEnd,
+  IN  UINT64                   PatchValue,
+  IN  UINTN                    ValueSize
+  );
+
+#endif // defined (MDE_CPU_IA32) || defined (MDE_CPU_X64)
+#endif // !defined (__BASE_LIB__)
